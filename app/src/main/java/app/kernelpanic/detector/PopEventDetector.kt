@@ -19,10 +19,22 @@ class PopEventDetector(private val config: DetectorConfig) {
 
     @Synchronized
     fun process(features: AudioFeatures, acceptingEvents: Boolean): PopEvent? {
+        // AudioRecord and WAV playback can begin with a short zero-filled buffer. It is not
+        // a meaningful room baseline and must not initialize the adaptive noise floor.
+        if (!initialized && features.digitalSilence) return null
         if (!initialized) {
             noiseFloorDb = features.rmsDb
             fluxFloor = max(features.spectralFlux, 0.008)
             initialized = true
+            return null
+        }
+
+        // Calibration frames establish the appliance/room baseline but can never open an
+        // excursion. Otherwise a startup edge can merge the entire session into one event.
+        if (!acceptingEvents) {
+            discardCandidate()
+            updateBackground(features, fast = true)
+            return null
         }
 
         val energyExcess = features.rmsDb - noiseFloorDb
@@ -92,10 +104,11 @@ class PopEventDetector(private val config: DetectorConfig) {
         candidateQuietSinceMs = null
     }
 
-    private fun updateBackground(features: AudioFeatures) {
+    private fun updateBackground(features: AudioFeatures, fast: Boolean = false) {
         if (features.digitalSilence) return
-        val energyAlpha = if (features.rmsDb < noiseFloorDb) 0.025 else 0.0025
+        val energyAlpha = if (fast) 0.06 else if (features.rmsDb < noiseFloorDb) 0.025 else 0.0025
+        val fluxAlpha = if (fast) 0.08 else 0.01
         noiseFloorDb += energyAlpha * (features.rmsDb - noiseFloorDb).coerceIn(-12.0, 3.0)
-        fluxFloor += 0.01 * (features.spectralFlux.coerceAtMost(fluxFloor * 2.0 + 0.01) - fluxFloor)
+        fluxFloor += fluxAlpha * (features.spectralFlux.coerceAtMost(fluxFloor * 2.0 + 0.01) - fluxFloor)
     }
 }

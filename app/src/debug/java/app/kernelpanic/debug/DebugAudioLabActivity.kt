@@ -98,7 +98,7 @@ private fun DebugLab() {
             }
         }.onSuccess {
             applyRun(it)
-            status = "Analyzed ${file.name}"
+            status = "Analysis complete: ${file.name}"
         }.onFailure { error = it.message }
         processing = false
     }
@@ -181,7 +181,7 @@ private fun DebugLab() {
                     val input = checkNotNull(context.contentResolver.openInputStream(uri))
                     analyzeSource(WavFileAudioSource(input))
                 }
-            }.onSuccess { applyRun(it); status = "Selected WAV analyzed" }
+            }.onSuccess { applyRun(it); status = "Analysis complete: selected WAV" }
                 .onFailure { error = it.message }
             processing = false
         }
@@ -220,6 +220,16 @@ private fun DebugLab() {
         item { Button(onClick = { documentPicker.launch("audio/*") }, enabled = !processing && !recording, modifier = Modifier.fillMaxWidth()) { Text("Open WAV file") } }
         latestRecording?.let { file ->
             item { OutlinedButton(onClick = { analyzeFile(file) }, enabled = !processing && !recording, modifier = Modifier.fillMaxWidth()) { Text("Analyze last recording") } }
+            item { Text("Latest saved recording: ${file.name}", style = MaterialTheme.typography.bodySmall) }
+        }
+        item {
+            if (processing) Text("Analyzing…", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            status?.let { Text(it, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold) }
+            error?.let { Text("Error: $it", color = MaterialTheme.colorScheme.error) }
+            result?.let { snapshot -> DetectorResultCard(snapshot) }
+        }
+        if (transitions.isNotEmpty()) {
+            item { Column { transitions.forEach { Text(it, style = MaterialTheme.typography.bodySmall) } } }
         }
         item { Text("Synthetic regression scenarios", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp)) }
         items(SyntheticScenario.entries) { scenario ->
@@ -240,13 +250,6 @@ private fun DebugLab() {
                 modifier = Modifier.fillMaxWidth(),
             ) { Text(scenario.title) }
         }
-        item {
-            if (processing) Text("Processing…")
-            status?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-            error?.let { Text("Error: $it", color = MaterialTheme.colorScheme.error) }
-            result?.let { snapshot -> DetectorResultCard(snapshot) }
-        }
-        item { Column { transitions.forEach { Text(it, style = MaterialTheme.typography.bodySmall) } } }
     }
 }
 
@@ -255,13 +258,20 @@ private fun DetectorResultCard(snapshot: DetectorSnapshot) {
     val event = snapshot.lastEvent
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp)) {
-            Text("State: ${snapshot.phase}", fontWeight = FontWeight.Bold)
+            Text(
+                snapshot.doneAtMs?.let { "Result: DONE detected at ${"%.1f".format(it / 1_000.0)} s" }
+                    ?: "Result: no DONE decision",
+                fontWeight = FontWeight.Bold,
+            )
+            Text("Final analyzed phase: ${snapshot.phase}")
+            if (snapshot.doneAtMs != null && snapshot.phase in setOf(SessionPhase.WARNING, SessionPhase.CRITICAL)) {
+                Text("The recording continued with microwave-like sound after DONE, so replay progressed to ${snapshot.phase}.")
+            }
             Text("Events: ${snapshot.detectedPops}")
             Text("Peak rate: ${"%.2f".format(snapshot.peakPopRate)}/s")
             Text("Recent median: ${snapshot.recentIntervalSeconds ?: "—"}")
             Text("Current gap: ${snapshot.currentGapSeconds?.let { "%.2f s".format(it) } ?: "—"}")
             Text("Active reached: ${snapshot.activeWasReached}")
-            Text("Done at: ${snapshot.doneAtMs ?: "—"} ms")
             if (event != null) {
                 Text("Last transient: ${"%.3f".format(event.score)} (${if (event.accepted) "accepted" else "rejected"})", fontWeight = FontWeight.Bold)
                 Text("RMS ${"%.1f".format(event.rmsDb)} dB • noise ${"%.1f".format(event.noiseFloorDb)} dB")

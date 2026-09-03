@@ -66,6 +66,19 @@ class SessionStateMachineTest {
         assertEquals(2.6, snapshot.currentGapSeconds!!, 0.001)
     }
 
+    @Test
+    fun rapidPopsAfterSparseIntervals_cancelPendingCompletion() {
+        val detector = PopcornSessionDetector(DetectorConfig())
+        val events = (4_000L..10_000L step 400L).toMutableSet()
+        events += setOf(12_000L, 14_000L, 16_000L, 16_500L, 17_000L)
+        var snapshot = DetectorSnapshot()
+        for (time in 0L..19_500L step 50L) {
+            snapshot = detector.process(features(time), if (time in events) pop(time) else null)
+        }
+        assertTrue(snapshot.activeWasReached)
+        assertNull("Recent rapid pops must invalidate older sparse intervals", snapshot.doneAtMs)
+    }
+
     private fun features(time: Long, digitalSilence: Boolean = false) = AudioFeatures(
         timestampMs = time,
         rms = if (digitalSilence) 0.0 else 0.03,

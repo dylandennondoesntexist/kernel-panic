@@ -27,6 +27,16 @@ class DetectorScenarioTest {
     }
 
     @Test
+    fun leadingDigitalSilence_doesNotPoisonAdaptiveNoiseFloor() {
+        val fixture = SyntheticAudioGenerator.render(SyntheticScenario.NORMAL)
+        val leadingSilence = ShortArray(fixture.sampleRate / 10)
+        val samples = leadingSilence + fixture.samples
+        val run = runFixture(samples, fixture.sampleRate)
+        assertTrue("Startup silence prevented the active phase (${run.last.detectedPops} events)", run.last.activeWasReached)
+        assertNotNull("Startup silence prevented completion", run.last.doneAtMs)
+    }
+
+    @Test
     fun oneEarlyLongGap_doesNotCausePrematureDone() {
         val run = runScenario(SyntheticScenario.EARLY_LONG_GAP)
         assertTrue(run.snapshots.any { it.phase == SessionPhase.ACTIVE })
