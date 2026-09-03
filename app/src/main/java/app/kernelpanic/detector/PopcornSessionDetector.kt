@@ -155,10 +155,10 @@ class PopcornSessionDetector(private val config: DetectorConfig) {
         if (!activeReached || doneAtMs != null) return
         val intervals = recentIntervals(config.decisionIntervalWindowSize)
         val median = median(intervals)
-        val trailingIntervals = intervals.takeLast(config.sparseRequiredIntervals)
-        val sufficientlySparse = trailingIntervals.size >= config.sparseRequiredIntervals &&
+        val sufficientlySparse = intervals.size >= config.sparseRequiredIntervals &&
             median != null && median >= config.sparseIntervalSeconds &&
-            trailingIntervals.all { it >= config.sparseIndividualIntervalSeconds } &&
+            intervals.count { it >= config.sparseIndividualIntervalSeconds } >= config.sparseRequiredIntervals &&
+            intervals.last() >= config.sparseIndividualIntervalSeconds &&
             shortRate <= peakRate * config.declinePeakRatio
         val noPopLongEnough = eventTimes.lastOrNull()?.let {
             now - it >= (config.noPopCompletionSeconds * 1000).toLong() && shortRate <= peakRate * config.declinePeakRatio

@@ -79,6 +79,21 @@ class SessionStateMachineTest {
         assertNull("Recent rapid pops must invalidate older sparse intervals", snapshot.doneAtMs)
     }
 
+    @Test
+    fun repeatedSparseCadenceCompletesWhileMicrowaveIsStillOperating() {
+        val detector = PopcornSessionDetector(DetectorConfig())
+        val events = (4_000L..10_000L step 400L).toMutableSet()
+        events += setOf(11_800L, 13_600L, 15_400L, 17_200L)
+        var snapshot = DetectorSnapshot()
+        for (time in 0L..18_000L step 50L) {
+            snapshot = detector.process(features(time), if (time in events) pop(time) else null)
+        }
+        assertTrue(snapshot.activeWasReached)
+        assertTrue("Sparse cadence should decide doneness without a stop signal", snapshot.doneAtMs != null)
+        assertTrue("The microwave must still be operating when doneness is decided", snapshot.microwaveOperating)
+        assertEquals(CompletionReason.DONE_DETECTED, snapshot.completionReason)
+    }
+
     private fun features(time: Long, digitalSilence: Boolean = false) = AudioFeatures(
         timestampMs = time,
         rms = if (digitalSilence) 0.0 else 0.03,

@@ -79,7 +79,7 @@ State-machine tests separately prove that silence, a lone early pop, and missing
 
 ## Debug Audio Lab
 
-Debug APKs add **Debug Audio Lab** to the main app's overflow menu while retaining a single launcher icon. The lab can run every bundled synthetic fixture, import a mono 16-bit PCM WAV file, or explicitly record a real microwave session to an app-specific WAV file. Recording one actual cooking session once provides a representative fixture that can be replayed repeatedly without using another bag during every tuning pass.
+Debug APKs add **Debug Audio Lab** to the main app's overflow menu while retaining a single launcher icon. The lab can run every bundled synthetic fixture, import a mono 16-bit PCM WAV file, or explicitly record a real microwave session to an app-specific WAV file. Its **Saved recordings** list provides Play/Stop and Analyze controls for every captured session, newest first. Recording one actual cooking session once provides a representative fixture that can be replayed repeatedly without using another bag during every tuning pass.
 
 All three inputs use the production `PopcornDetector`. The lab displays accepted/rejected status, score, RMS and noise floor, spectral flux, high-frequency ratio, crest factor, flatness, attack ratio, lifecycle transitions, peak rate, current gap, active evidence, and completion timestamp. Recorded files can also be retrieved with Android Studio's Device Explorer for comparison on a development machine.
 
@@ -89,6 +89,8 @@ The activity, recorder, and raw-file writer live under `app/src/debug`, so they 
 
 All meaningful thresholds are documented in [`DetectorConfig.kt`](app/src/main/java/app/kernelpanic/detector/DetectorConfig.kt): frame/hop sizes, bands, adaptive energy and flux gates, event merge/separation durations, active evidence, decline ratio, sparse interval statistics, no-pop completion, signal loss, appliance-stop persistence, and alert escalation delays.
 
+Doneness is based on the observed acoustic lifecycle, never an expected cook duration or an absolute position in a recording. Microwave-band drop detection can close an unfinished session without claiming doneness; it cannot produce or strengthen a `DONE` decision.
+
 Tune from real recordings by importing WAV files into Debug Audio Lab, then run the full regression suite. Avoid optimizing one kitchen recording at the expense of early-done safety regressions.
 
 ## Privacy
@@ -97,7 +99,7 @@ Kernel Panic has no backend, account, ads, analytics, cloud storage, or networki
 
 ## Limitations
 
-This release uses deterministic signal processing and statistical heuristics, not a trained machine-learning model. Microwave acoustics, automatic microphone gain, rooms, phone placement, bags, and brands vary. External transient sounds can resemble pops, and quiet pops can be missed. The state machine is intentionally conservative: a slightly late alert is preferred to an alert during active popping. Real cooking sessions on several appliances remain essential for field calibration.
+This release uses deterministic signal processing and statistical heuristics, not a trained machine-learning model. Microwave acoustics, automatic microphone gain, rooms, phone placement, bags, and brands vary. External transient sounds can resemble pops, quiet pops can be missed, and simultaneous kernels can merge into one accepted acoustic event. The displayed event count is therefore not yet an exact popped-kernel estimate. The state machine is intentionally conservative: a slightly late alert is preferred to an alert during active popping. Real cooking sessions on several appliances remain essential for field calibration.
 
 ## License
 

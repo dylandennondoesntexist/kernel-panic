@@ -39,7 +39,7 @@ class PopEventDetector(private val config: DetectorConfig) {
 
         val energyExcess = features.rmsDb - noiseFloorDb
         val energyScore = ((energyExcess - config.energyRiseDb) / 10.0).coerceIn(0.0, 1.0)
-        val fluxScore = ((features.spectralFlux - max(config.minimumSpectralFlux, fluxFloor * 1.7)) / 0.22).coerceIn(0.0, 1.0)
+        val fluxScore = ((features.spectralFlux - max(config.minimumSpectralFlux, fluxFloor * config.scoreFluxFloorMultiplier)) / 0.22).coerceIn(0.0, 1.0)
         val highScore = ((features.highFrequencyRatio - config.minimumHighFrequencyRatio) / 0.50).coerceIn(0.0, 1.0)
         val crestScore = ((features.crestFactor - config.minimumCrestFactor) / 5.0).coerceIn(0.0, 1.0)
         val onsetScore = ((features.attackRatio - 1.35) / 4.0).coerceIn(0.0, 1.0)
@@ -50,8 +50,8 @@ class PopEventDetector(private val config: DetectorConfig) {
         // Start an inspectable excursion from energy/flux/onset. Spectral shape and crest
         // remain acceptance gates, so debug builds can explain rejected speaker/room sounds.
         val looksTransient = energyExcess >= config.energyRiseDb &&
-            features.spectralFlux >= max(config.minimumSpectralFlux, fluxFloor * 1.45) &&
-            (features.attackRatio >= 1.25 || candidate != null)
+            features.spectralFlux >= max(config.minimumSpectralFlux, fluxFloor * config.candidateFluxFloorMultiplier) &&
+            (features.attackRatio >= config.minimumAttackRatio || candidate != null)
 
         val frameEvent = PopEvent(
             timestampMs = features.timestampMs,

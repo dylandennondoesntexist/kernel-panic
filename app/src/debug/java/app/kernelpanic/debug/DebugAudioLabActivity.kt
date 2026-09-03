@@ -2,6 +2,7 @@ package app.kernelpanic.debug
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.media.MediaPlayer
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -76,11 +78,48 @@ private fun DebugLab() {
     var activeSource by remember { mutableStateOf<AudioSource?>(null) }
     var activeWriter by remember { mutableStateOf<WavPcmWriter?>(null) }
     var recordingJob by remember { mutableStateOf<Job?>(null) }
+    val mediaPlayer = remember { mutableStateOf<MediaPlayer?>(null) }
+    var playingFile by remember { mutableStateOf<File?>(null) }
     val recordingsDirectory = remember {
         File(checkNotNull(context.getExternalFilesDir(null)), "recordings").apply { mkdirs() }
     }
-    var latestRecording by remember {
-        mutableStateOf(recordingsDirectory.listFiles { file -> file.extension.equals("wav", true) }?.maxByOrNull { it.lastModified() })
+    var recordings by remember { mutableStateOf(savedRecordings(recordingsDirectory)) }
+
+    fun stopPlayback(showStatus: Boolean = false) {
+        val stoppedFile = playingFile
+        mediaPlayer.value?.let { player ->
+            runCatching { player.stop() }
+            player.release()
+        }
+        mediaPlayer.value = null
+        playingFile = null
+        if (showStatus && stoppedFile != null) status = "Playback stopped: ${stoppedFile.name}"
+    }
+
+    fun playRecording(file: File) {
+        stopPlayback()
+        error = null
+        runCatching {
+            MediaPlayer().also { player ->
+                mediaPlayer.value = player
+                player.setDataSource(file.absolutePath)
+                player.setOnCompletionListener { completed ->
+                    completed.release()
+                    if (mediaPlayer.value === completed) {
+                        mediaPlayer.value = null
+                        playingFile = null
+                        status = "Playback finished: ${file.name}"
+                    }
+                }
+                player.prepare()
+                playingFile = file
+                player.start()
+                status = "Playing ${file.name}"
+            }
+        }.onFailure { throwable ->
+            stopPlayback()
+            error = throwable.message ?: "Playback failed"
+        }
     }
 
     fun applyRun(run: DetectorRun) {
@@ -89,6 +128,7 @@ private fun DebugLab() {
     }
 
     fun analyzeFile(file: File) = scope.launch {
+        stopPlayback()
         processing = true
         error = null
         status = "Analyzing ${file.name}…"
@@ -105,17 +145,20 @@ private fun DebugLab() {
 
     fun startRecording() {
         if (recording || processing) return
+        stopPlayback()
         error = null
         result = null
         transitions = emptyList()
         val job = scope.launch(Dispatchers.Default) {
             var source: MicrophoneAudioSource? = null
             var writer: WavPcmWriter? = null
+            var outputFile: File? = null
             try {
                 val microphone = MicrophoneAudioSource.create(context)
                 source = microphone
                 val stamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
                 val file = File(recordingsDirectory, "kernel-panic-$stamp.wav")
+                outputFile = file
                 val wavWriter = WavPcmWriter(file, microphone.sampleRate)
                 writer = wavWriter
                 val detector = PopcornDetector(microphone.sampleRate, configFor(microphone.sampleRate))
@@ -125,7 +168,6 @@ private fun DebugLab() {
                 withContext(Dispatchers.Main) {
                     activeSource = source
                     activeWriter = writer
-                    latestRecording = file
                     recording = true
                     status = "Recording ${file.name}. Cook normally, then tap Stop recording."
                 }
@@ -153,7 +195,8 @@ private fun DebugLab() {
                     activeWriter = null
                     recording = false
                     recordingJob = null
-                    latestRecording?.let { status = "Saved ${it.absolutePath}" }
+                    recordings = savedRecordings(recordingsDirectory)
+                    outputFile?.let { status = "Saved ${it.absolutePath}" }
                 }
             }
         }
@@ -173,6 +216,7 @@ private fun DebugLab() {
     }
     val documentPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) scope.launch {
+            stopPlayback()
             processing = true
             error = null
             status = "Analyzing selected WAV…"
@@ -194,6 +238,8 @@ private fun DebugLab() {
                 activeWriter?.close()
                 recordingJob?.cancel()
             }
+            mediaPlayer.value?.release()
+            mediaPlayer.value = null
         }
     }
 
@@ -218,9 +264,45 @@ private fun DebugLab() {
             ) { Text(if (recording) "Stop and save recording" else "Record a real microwave session") }
         }
         item { Button(onClick = { documentPicker.launch("audio/*") }, enabled = !processing && !recording, modifier = Modifier.fillMaxWidth()) { Text("Open WAV file") } }
-        latestRecording?.let { file ->
-            item { OutlinedButton(onClick = { analyzeFile(file) }, enabled = !processing && !recording, modifier = Modifier.fillMaxWidth()) { Text("Analyze last recording") } }
-            item { Text("Latest saved recording: ${file.name}", style = MaterialTheme.typography.bodySmall) }
+        if (recordings.isNotEmpty()) {
+            item {
+                Text(
+                    "Saved recordings (${recordings.size})",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
+            item { Text("Newest first. Playback uses your phone speaker and does not change the recording.", style = MaterialTheme.typography.bodySmall) }
+            items(recordings, key = { it.absolutePath }) { file ->
+                Card(Modifier.fillMaxWidth()) {
+                    Column(
+                        Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(file.name, fontWeight = FontWeight.Bold)
+                        Text("${"%.1f".format(file.length() / 1_048_576.0)} MB", style = MaterialTheme.typography.bodySmall)
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    if (playingFile == file) stopPlayback(showStatus = true)
+                                    else playRecording(file)
+                                },
+                                enabled = !processing && !recording,
+                                modifier = Modifier.weight(1f),
+                            ) { Text(if (playingFile == file) "Stop" else "Play") }
+                            OutlinedButton(
+                                onClick = { analyzeFile(file) },
+                                enabled = !processing && !recording,
+                                modifier = Modifier.weight(1f),
+                            ) { Text("Analyze") }
+                        }
+                    }
+                }
+            }
         }
         item {
             if (processing) Text("Analyzing…", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
@@ -236,6 +318,7 @@ private fun DebugLab() {
             Button(
                 onClick = {
                     scope.launch {
+                        stopPlayback()
                         processing = true; error = null; transitions = emptyList(); result = null
                         runCatching {
                             withContext(Dispatchers.Default) {
@@ -267,7 +350,8 @@ private fun DetectorResultCard(snapshot: DetectorSnapshot) {
             if (snapshot.doneAtMs != null && snapshot.phase in setOf(SessionPhase.WARNING, SessionPhase.CRITICAL)) {
                 Text("The recording continued with microwave-like sound after DONE, so replay progressed to ${snapshot.phase}.")
             }
-            Text("Events: ${snapshot.detectedPops}")
+            Text("Accepted pop-like events: ${snapshot.detectedPops}")
+            Text("One event can contain overlapping kernels; this is not a kernel count.", style = MaterialTheme.typography.bodySmall)
             Text("Peak rate: ${"%.2f".format(snapshot.peakPopRate)}/s")
             Text("Recent median: ${snapshot.recentIntervalSeconds ?: "—"}")
             Text("Current gap: ${snapshot.currentGapSeconds?.let { "%.2f s".format(it) } ?: "—"}")
@@ -316,6 +400,11 @@ private fun runDetector(samples: ShortArray, sampleRate: Int): DetectorRun {
 }
 
 private data class DetectorRun(val snapshot: DetectorSnapshot, val transitions: List<String>)
+
+private fun savedRecordings(directory: File): List<File> =
+    directory.listFiles { file -> file.extension.equals("wav", true) }
+        ?.sortedWith(compareByDescending<File> { it.lastModified() }.thenByDescending { it.name })
+        .orEmpty()
 
 private fun configFor(sampleRate: Int) = if (sampleRate >= 40_000) DetectorConfig()
 else DetectorConfig(frameSize = 512, hopSize = 256, popBandHighHz = sampleRate * 0.45)

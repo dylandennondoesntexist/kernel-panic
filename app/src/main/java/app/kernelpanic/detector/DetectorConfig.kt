@@ -17,6 +17,9 @@ data class DetectorConfig(
     val energyRiseDb: Double = 3.0,
     val onsetRiseDb: Double = 2.2,
     val minimumSpectralFlux: Double = 0.025,
+    val candidateFluxFloorMultiplier: Double = 1.30,
+    val scoreFluxFloorMultiplier: Double = 1.35,
+    val minimumAttackRatio: Double = 1.20,
     val minimumHighFrequencyRatio: Double = 0.18,
     val minimumCrestFactor: Double = 2.0,
     val transientScoreThreshold: Double = 0.46,
@@ -38,8 +41,10 @@ data class DetectorConfig(
     val decisionIntervalWindowSize: Int = 5,
     val sparseIntervalSeconds: Double = 1.65,
     val sparseIndividualIntervalSeconds: Double = 1.45,
-    val sparseRequiredIntervals: Int = 3,
-    val sparsePersistenceSeconds: Double = 2.2,
+    /** Four of the latest five intervals must be sparse; no absolute cook time is used. */
+    val sparseRequiredIntervals: Int = 4,
+    /** Briefly confirms the cadence without waiting for the microwave to stop. */
+    val sparsePersistenceSeconds: Double = 0.3,
     val noPopCompletionSeconds: Double = 4.6,
     val microwaveMinimumDb: Double = -58.0,
     val microwaveStopDropDb: Double = 13.0,

@@ -129,7 +129,7 @@ fun HomeScreen(
                     currentGap != null && currentGap > (recentMedian ?: 0.0)
                 val intervalValue = if (showGap) currentGap else recentMedian
                 LiveStat("Time", formatDuration(state.detector.elapsedMs), foreground)
-                LiveStat("Detected Pops", state.detector.detectedPops.toString(), foreground)
+                LiveStat("Pop events", state.detector.detectedPops.toString(), foreground)
                 LiveStat(if (showGap) "Current gap" else "Recent median", intervalValue?.let { String.format(Locale.US, "%.1f s", it) } ?: "—", foreground)
             }
             OutlinedButton(onClick = onStop, modifier = Modifier.fillMaxWidth().height(56.dp)) { Text("STOP") }
