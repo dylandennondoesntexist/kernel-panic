@@ -1,0 +1,2 @@
+-keep class app.kernelpanic.data.KernelPanicDatabase_Impl { *; }
+-keepattributes *Annotation*

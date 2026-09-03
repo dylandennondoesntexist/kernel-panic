@@ -1,0 +1,8 @@
+<resources>
+    <style name="Theme.KernelPanic" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:navigationBarColor">#1E1D1B</item>
+        <item name="android:statusBarColor">#1E1D1B</item>
+    </style>
+</resources>
