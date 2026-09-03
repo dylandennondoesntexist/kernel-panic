@@ -84,6 +84,10 @@ class KernelPanicViewModel(application: Application) : AndroidViewModel(applicat
         finalize(snapshot)
     }
 
+    fun suppressSelfNoise(durationMs: Long = 1_400) {
+        detector?.suppressEventsFor(durationMs)
+    }
+
     fun interruptListening(message: String = "Listening was interrupted") {
         if (!mutableState.value.listening) return
         interruptInternal(message)
@@ -122,7 +126,12 @@ class KernelPanicViewModel(application: Application) : AndroidViewModel(applicat
 
     fun navigate(screen: AppScreen) {
         if (mutableState.value.listening) return
-        mutableState.value = mutableState.value.copy(screen = screen, selectedSession = null, message = null)
+        mutableState.value = mutableState.value.copy(
+            screen = screen,
+            selectedSession = null,
+            message = null,
+            detector = if (screen == AppScreen.HOME) DetectorSnapshot() else mutableState.value.detector,
+        )
         if (screen == AppScreen.HISTORY) loadHistory()
     }
 

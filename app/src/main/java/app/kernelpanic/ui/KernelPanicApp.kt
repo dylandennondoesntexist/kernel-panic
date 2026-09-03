@@ -44,6 +44,7 @@ fun KernelPanicApp(
     hasMicrophonePermission: () -> Boolean,
     requestMicrophonePermission: (((Boolean, Boolean) -> Unit) -> Unit),
     openAppSettings: () -> Unit,
+    openDebugAudioLab: () -> Unit,
 ) {
     KernelPanicTheme {
         val ui by viewModel.state.collectAsStateWithLifecycle()
@@ -67,12 +68,17 @@ fun KernelPanicApp(
         }
         LaunchedEffect(ui.detector.phase) {
             when (ui.detector.phase) {
-                SessionPhase.DONE -> alertController.alert("Popcorn is done")
+                SessionPhase.DONE -> {
+                    viewModel.suppressSelfNoise()
+                    alertController.alert("Popcorn is done")
+                }
                 SessionPhase.WARNING -> while (isActive) {
+                    viewModel.suppressSelfNoise()
                     alertController.alert("Take it out")
                     delay(6_000)
                 }
                 SessionPhase.CRITICAL -> while (isActive) {
+                    viewModel.suppressSelfNoise()
                     alertController.alert("Stop the microwave", critical = true)
                     delay(5_000)
                 }
@@ -98,6 +104,7 @@ fun KernelPanicApp(
                         onStart = viewModel::startListening,
                         onStop = viewModel::stopListening,
                         onNavigate = viewModel::navigate,
+                        openDebugAudioLab = openDebugAudioLab,
                     )
                     AppScreen.SUMMARY -> SummaryScreen(ui.detector, onHome = { viewModel.navigate(AppScreen.HOME) }, onHistory = { viewModel.navigate(AppScreen.HISTORY) })
                     AppScreen.HISTORY -> HistoryScreen(ui.history, onBack = { viewModel.navigate(AppScreen.HOME) }, onSelect = viewModel::selectSession, onDelete = viewModel::deleteSession, onDeleteAll = viewModel::deleteAllHistory)
@@ -134,6 +141,6 @@ fun KernelPanicApp(
     }
 }
 
-const val HOW_IT_WORKS = "Kernel Panic does not simply run a timer. It listens for short, broadband sounds that resemble popcorn pops. It watches the popping rate rise into a sustained active phase, then looks for a consistent decline and several sparse intervals before alerting you. A lone sound or one long gap cannot cause a done alert.\n\nThe detector uses digital signal processing and statistical rules—not machine learning. Kitchens, phones, microwave ovens, and popcorn all sound different, so the estimate can be wrong."
+const val HOW_IT_WORKS = "Kernel Panic does not simply run a timer. It listens for short, broadband sounds that resemble popcorn pops. It watches the popping rate rise into a sustained active phase, then looks for a consistent decline and several sparse intervals before alerting you. A lone sound or one long gap cannot cause a done alert.\n\nThe interval display is the median of the three most recent completed intervals. During the final slowdown, a current gap may be shown instead because no new interval exists until another pop occurs. The done decision uses a more conservative five-interval statistic and can also recognize sustained silence after an active cycle.\n\nThe detector uses digital signal processing and statistical rules—not machine learning. Kitchens, phones, microwave ovens, and popcorn all sound different, so the estimate can be wrong."
 const val PRIVACY = "Microphone access is used only while the listening screen is active. Audio is analyzed on this device in real time. Release builds do not save recordings, and audio is never uploaded or transmitted.\n\nThere is no account. Only derived session statistics—such as duration, detected pop events, and peak rate—are stored locally. You can delete one session or all history at any time."
 const val ABOUT = "Kernel Panic is a playful, open-source cooking companion. It is a convenience aid, not a cooking safety system.\n\nStay near the microwave, follow the popcorn manufacturer's instructions, and use your own judgment. Microwave behavior varies. Do not put your phone inside the microwave; keep it nearby with the microphone unobstructed.\n\nVersion 1.0.0"

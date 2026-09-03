@@ -12,6 +12,7 @@ enum class SyntheticScenario(val title: String) {
     FAST_POPS("Fast successive pops"),
     KNOCKS("Loud external knocks"),
     SPEECH("Speech over microwave"),
+    MIXED_DISTRACTORS("Crinkling, beeps, traffic, and room noise"),
     LOW_SNR("Low signal-to-noise lifecycle"),
     INPUT_FAILURE("Input failure"),
     STOP_EARLY("Microwave stops early"),
@@ -36,7 +37,7 @@ object SyntheticAudioGenerator {
             SyntheticScenario.FAST_POPS -> 22.0
             SyntheticScenario.INPUT_FAILURE -> 35.0
             SyntheticScenario.STOP_EARLY -> 25.0
-            SyntheticScenario.CONTINUES_AFTER_DONE -> 60.0
+            SyntheticScenario.CONTINUES_AFTER_DONE, SyntheticScenario.MIXED_DISTRACTORS -> 60.0
             else -> 48.0
         }
         val normal = normalPopTimes()
@@ -97,6 +98,21 @@ object SyntheticAudioGenerator {
                     val syllables = (0.35 + 0.65 * sin(2.0 * PI * 3.8 * time).coerceAtLeast(0.0))
                     value += syllables * (0.065 * sin(2.0 * PI * 185.0 * time) +
                         0.035 * sin(2.0 * PI * 510.0 * time) + 0.018 * sin(2.0 * PI * 920.0 * time))
+                }
+            }
+            if (scenario == SyntheticScenario.MIXED_DISTRACTORS) {
+                val beepPhase = time % 0.55
+                if (time in 8.0..10.5 && beepPhase < 0.12) {
+                    value += 0.13 * sin(2.0 * PI * 2_100.0 * time)
+                }
+                if (time in 19.0..20.1) {
+                    value += 0.11 * noise() * (0.7 + 0.3 * sin(2.0 * PI * 17.0 * time))
+                }
+                if (time in 29.0..40.0) {
+                    value += 0.045 * sin(2.0 * PI * 82.0 * time) + 0.018 * noise()
+                }
+                if (time in 46.0..46.4) {
+                    value += 0.14 * noise()
                 }
             }
             samples[index] = (value.coerceIn(-0.98, 0.98) * Short.MAX_VALUE).toInt().toShort()

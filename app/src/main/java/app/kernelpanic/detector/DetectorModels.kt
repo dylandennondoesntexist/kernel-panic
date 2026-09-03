@@ -35,6 +35,9 @@ data class PopEvent(
     val spectralFlux: Double,
     val highFrequencyRatio: Double,
     val accepted: Boolean,
+    val crestFactor: Double = 0.0,
+    val spectralFlatness: Double = 0.0,
+    val attackRatio: Double = 0.0,
 )
 
 data class DetectorSnapshot(
@@ -42,6 +45,7 @@ data class DetectorSnapshot(
     val elapsedMs: Long = 0,
     val detectedPops: Int = 0,
     val recentIntervalSeconds: Double? = null,
+    val currentGapSeconds: Double? = null,
     val shortPopRate: Double = 0.0,
     val peakPopRate: Double = 0.0,
     val firstPopMs: Long? = null,

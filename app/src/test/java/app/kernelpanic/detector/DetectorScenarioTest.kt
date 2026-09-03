@@ -50,6 +50,22 @@ class DetectorScenarioTest {
     }
 
     @Test
+    fun selfNoiseSuppression_ignoresAlertWindowAndThenResumes() {
+        val fixture = SyntheticAudioGenerator.render(SyntheticScenario.FAST_POPS)
+        val config = DetectorConfig(frameSize = 512, hopSize = 256, popBandHighHz = fixture.sampleRate * 0.45)
+        val detector = PopcornDetector(fixture.sampleRate, config)
+        val firstEnd = (fixture.sampleRate * 4.8).toInt()
+        detector.process(fixture.samples.copyOfRange(0, firstEnd))
+        detector.suppressEventsFor(1_800)
+        val suppressedEnd = (fixture.sampleRate * 6.6).toInt()
+        val suppressed = detector.process(fixture.samples.copyOfRange(firstEnd, suppressedEnd)).last()
+        assertEquals(0, suppressed.detectedPops)
+        val resumedEnd = (fixture.sampleRate * 8.0).toInt()
+        val resumed = detector.process(fixture.samples.copyOfRange(suppressedEnd, resumedEnd)).last()
+        assertTrue("Detection did not resume after the app-noise guard", resumed.detectedPops > 5)
+    }
+
+    @Test
     fun loudKnocks_areRejectedAndCannotCauseDone() {
         val run = runScenario(SyntheticScenario.KNOCKS)
         assertTrue("Knocks accepted as pops: ${run.last.detectedPops}", run.last.detectedPops <= 1)
@@ -61,6 +77,14 @@ class DetectorScenarioTest {
     fun speech_doesNotAccumulatePopEventsOrCauseDone() {
         val run = runScenario(SyntheticScenario.SPEECH)
         assertTrue("Speech accepted repeatedly: ${run.last.detectedPops}", run.last.detectedPops <= 2)
+        assertFalse(run.last.activeWasReached)
+        assertEquals(null, run.last.doneAtMs)
+    }
+
+    @Test
+    fun mixedEnvironmentalDistractors_doNotEstablishActiveOrDone() {
+        val run = runScenario(SyntheticScenario.MIXED_DISTRACTORS)
+        assertTrue("Distractors accepted too often: ${run.last.detectedPops}", run.last.detectedPops <= 6)
         assertFalse(run.last.activeWasReached)
         assertEquals(null, run.last.doneAtMs)
     }

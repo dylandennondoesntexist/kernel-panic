@@ -10,7 +10,7 @@ Kernel Panic asks for microphone permission only when you tap **Start Listening*
 
 Release builds do not save raw microphone audio. Audio is not uploaded, transmitted, shared, or retained after real-time processing. Microphone capture stops and its resources are released when the session ends, when you press Stop, or when the app leaves the foreground.
 
-Debug builds intended for developers include an Audio Lab that can process a WAV file explicitly selected by the developer. This interface is not included in release builds.
+Debug builds intended for developers include an Audio Lab that can process a WAV file explicitly selected by the developer or explicitly record a real test session into the app-specific external-files directory. This interface and recording code are not included in release builds.
 
 ## Stored data
 

@@ -40,6 +40,11 @@ class MainActivity : ComponentActivity() {
                 openAppSettings = {
                     startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:$packageName".toUri()))
                 },
+                openDebugAudioLab = {
+                    if (BuildConfig.DEBUG) {
+                        startActivity(Intent().setClassName(packageName, "app.kernelpanic.debug.DebugAudioLabActivity"))
+                    }
+                },
             )
         }
     }

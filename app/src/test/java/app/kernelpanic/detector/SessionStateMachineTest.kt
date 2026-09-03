@@ -1,6 +1,7 @@
 package app.kernelpanic.detector
 
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -50,6 +51,19 @@ class SessionStateMachineTest {
         assertTrue(snapshot.activeWasReached)
         assertTrue(snapshot.phase == SessionPhase.INTERRUPTED)
         assertNull(snapshot.doneAtMs)
+    }
+
+    @Test
+    fun displayMedianUsesThreeLatestIntervalsAndCurrentGapKeepsGrowing() {
+        val detector = PopcornSessionDetector(DetectorConfig())
+        val active = (4_000L..7_000L step 300L).toMutableSet()
+        active += setOf(7_200L, 7_500L, 7_900L, 9_400L, 11_400L)
+        var snapshot = DetectorSnapshot()
+        for (time in 0L..14_000L step 100L) {
+            snapshot = detector.process(features(time), if (time in active) pop(time) else null)
+            if (time == 11_400L) assertEquals(1.5, snapshot.recentIntervalSeconds!!, 0.001)
+        }
+        assertEquals(2.6, snapshot.currentGapSeconds!!, 0.001)
     }
 
     private fun features(time: Long, digitalSilence: Boolean = false) = AudioFeatures(

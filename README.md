@@ -79,9 +79,11 @@ State-machine tests separately prove that silence, a lone early pop, and missing
 
 ## Debug Audio Lab
 
-Debug APKs include a second launcher activity named **Kernel Panic — Debug Audio Lab**. It can run every bundled synthetic fixture or import a mono, 16-bit PCM WAV file. Both use the production `PopcornDetector`, and the lab displays event count, last transient score, lifecycle transitions, peak rate, active evidence, and completion timestamp.
+Debug APKs add **Debug Audio Lab** to the main app's overflow menu while retaining a single launcher icon. The lab can run every bundled synthetic fixture, import a mono 16-bit PCM WAV file, or explicitly record a real microwave session to an app-specific WAV file. Recording one actual cooking session once provides a representative fixture that can be replayed repeatedly without using another bag during every tuning pass.
 
-The activity and its manifest entry live under `app/src/debug`, so they are not compiled into release builds. Release builds contain no recording/export feature.
+All three inputs use the production `PopcornDetector`. The lab displays accepted/rejected status, score, RMS and noise floor, spectral flux, high-frequency ratio, crest factor, flatness, attack ratio, lifecycle transitions, peak rate, current gap, active evidence, and completion timestamp. Recorded files can also be retrieved with Android Studio's Device Explorer for comparison on a development machine.
+
+The activity, recorder, and raw-file writer live under `app/src/debug`, so they are not compiled into release builds. Release builds contain no recording/export feature.
 
 ## Detector Tuning
 

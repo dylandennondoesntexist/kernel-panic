@@ -17,6 +17,7 @@ class PopEventDetector(private val config: DetectorConfig) {
         var best: PopEvent,
     )
 
+    @Synchronized
     fun process(features: AudioFeatures, acceptingEvents: Boolean): PopEvent? {
         if (!initialized) {
             noiseFloorDb = features.rmsDb
@@ -34,10 +35,10 @@ class PopEventDetector(private val config: DetectorConfig) {
         val score = (0.25 * energyScore + 0.23 * fluxScore + 0.18 * highScore +
             0.15 * crestScore + 0.12 * onsetScore + 0.07 * flatnessScore).coerceIn(0.0, 1.0)
 
+        // Start an inspectable excursion from energy/flux/onset. Spectral shape and crest
+        // remain acceptance gates, so debug builds can explain rejected speaker/room sounds.
         val looksTransient = energyExcess >= config.energyRiseDb &&
             features.spectralFlux >= max(config.minimumSpectralFlux, fluxFloor * 1.45) &&
-            features.highFrequencyRatio >= config.minimumHighFrequencyRatio &&
-            features.crestFactor >= config.minimumCrestFactor &&
             (features.attackRatio >= 1.25 || candidate != null)
 
         val frameEvent = PopEvent(
@@ -48,6 +49,9 @@ class PopEventDetector(private val config: DetectorConfig) {
             spectralFlux = features.spectralFlux,
             highFrequencyRatio = features.highFrequencyRatio,
             accepted = false,
+            crestFactor = features.crestFactor,
+            spectralFlatness = features.spectralFlatness,
+            attackRatio = features.attackRatio,
         )
 
         if (looksTransient) {
@@ -68,6 +72,8 @@ class PopEventDetector(private val config: DetectorConfig) {
                 val duration = completed.lastCandidateMs - completed.startedMs
                 val separated = completed.best.timestampMs - lastAcceptedMs >= config.minimumEventSeparationMs
                 val accepted = acceptingEvents && completed.best.score >= config.transientScoreThreshold &&
+                    completed.best.highFrequencyRatio >= config.minimumHighFrequencyRatio &&
+                    completed.best.crestFactor >= config.minimumCrestFactor &&
                     duration <= config.maximumEventDurationMs && separated
                 if (accepted) lastAcceptedMs = completed.best.timestampMs
                 updateBackground(features)
@@ -77,6 +83,13 @@ class PopEventDetector(private val config: DetectorConfig) {
             updateBackground(features)
         }
         return null
+    }
+
+    /** Drops an excursion that began before or during an app-generated alert. */
+    @Synchronized
+    fun discardCandidate() {
+        candidate = null
+        candidateQuietSinceMs = null
     }
 
     private fun updateBackground(features: AudioFeatures) {

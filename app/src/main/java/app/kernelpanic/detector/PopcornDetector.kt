@@ -12,6 +12,7 @@ class PopcornDetector(
     private var ringWrite = 0
     private var samplesSeen = 0L
     private var samplesSinceAnalysis = 0
+    @Volatile private var suppressUntilSample = 0L
 
     fun process(samples: ShortArray): List<DetectorSnapshot> {
         val results = ArrayList<DetectorSnapshot>(samples.size / config.hopSize + 1)
@@ -27,7 +28,13 @@ class PopcornDetector(
                 val timestampMs = samplesSeen * 1000L / sampleRate
                 val features = extractor.extract(frame, timestampMs)
                 val calibrating = timestampMs < (config.calibrationSeconds * 1000).toLong()
-                val event = eventDetector.process(features, acceptingEvents = !calibrating)
+                val suppressed = samplesSeen <= suppressUntilSample
+                val event = if (suppressed) {
+                    eventDetector.discardCandidate()
+                    null
+                } else {
+                    eventDetector.process(features, acceptingEvents = !calibrating)
+                }
                 results += sessionDetector.process(features, event)
             }
         }
@@ -35,4 +42,11 @@ class PopcornDetector(
     }
 
     fun stopManually(): DetectorSnapshot = sessionDetector.stopManually(samplesSeen * 1000L / sampleRate)
+
+    /** Prevents the phone's own speech, tone, or vibration from being counted as a pop. */
+    fun suppressEventsFor(durationMs: Long) {
+        val extraSamples = durationMs.coerceAtLeast(0) * sampleRate / 1000L
+        suppressUntilSample = maxOf(suppressUntilSample, samplesSeen + extraSamples)
+        eventDetector.discardCandidate()
+    }
 }

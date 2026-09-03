@@ -14,12 +14,12 @@ data class DetectorConfig(
     /** Seconds spent learning the appliance and room background. */
     val calibrationSeconds: Double = 2.5,
     /** Minimum broadband rise above the adaptive background for a transient candidate. */
-    val energyRiseDb: Double = 3.4,
+    val energyRiseDb: Double = 3.0,
     val onsetRiseDb: Double = 2.2,
     val minimumSpectralFlux: Double = 0.025,
-    val minimumHighFrequencyRatio: Double = 0.22,
-    val minimumCrestFactor: Double = 2.4,
-    val transientScoreThreshold: Double = 0.48,
+    val minimumHighFrequencyRatio: Double = 0.18,
+    val minimumCrestFactor: Double = 2.0,
+    val transientScoreThreshold: Double = 0.46,
     /** Candidate frames separated by this much quiet are treated as separate acoustic events. */
     val eventReleaseMs: Long = 32,
     /** Suppresses ringing from one pop while preserving rapid double-pops. */
@@ -32,7 +32,10 @@ data class DetectorConfig(
     val activeMinimumSpanSeconds: Double = 2.0,
     val declinePeakRatio: Double = 0.55,
     val declineMinimumPeakRate: Double = 1.2,
-    val intervalWindowSize: Int = 5,
+    /** Shorter statistic shown to the user so the display responds to the latest few pops. */
+    val displayIntervalWindowSize: Int = 3,
+    /** More conservative statistic used by the doneness decision. */
+    val decisionIntervalWindowSize: Int = 5,
     val sparseIntervalSeconds: Double = 1.65,
     val sparseIndividualIntervalSeconds: Double = 1.45,
     val sparseRequiredIntervals: Int = 3,

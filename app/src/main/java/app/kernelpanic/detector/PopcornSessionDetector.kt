@@ -64,6 +64,7 @@ class PopcornSessionDetector(private val config: DetectorConfig) {
             elapsedMs = atMs,
             detectedPops = eventTimes.size,
             recentIntervalSeconds = medianRecentInterval(),
+            currentGapSeconds = currentGap(atMs),
             shortPopRate = rate(atMs, config.shortRateWindowSeconds),
             peakPopRate = peakRate,
             firstPopMs = firstPopMs,
@@ -152,7 +153,7 @@ class PopcornSessionDetector(private val config: DetectorConfig) {
 
     private fun evaluateDone(now: Long, shortRate: Double) {
         if (!activeReached || doneAtMs != null) return
-        val intervals = recentIntervals(config.intervalWindowSize)
+        val intervals = recentIntervals(config.decisionIntervalWindowSize)
         val median = median(intervals)
         val sufficientlySparse = intervals.size >= config.sparseRequiredIntervals &&
             median != null && median >= config.sparseIntervalSeconds &&
@@ -190,7 +191,9 @@ class PopcornSessionDetector(private val config: DetectorConfig) {
 
     private fun recentIntervals(count: Int): List<Double> = eventTimes.zipWithNext { a, b -> (b - a) / 1000.0 }.takeLast(count)
 
-    private fun medianRecentInterval(): Double? = median(recentIntervals(config.intervalWindowSize))
+    private fun medianRecentInterval(): Double? = median(recentIntervals(config.displayIntervalWindowSize))
+
+    private fun currentGap(now: Long): Double? = eventTimes.lastOrNull()?.let { (now - it).coerceAtLeast(0) / 1000.0 }
 
     private fun median(values: List<Double>): Double? {
         if (values.isEmpty()) return null
@@ -214,6 +217,7 @@ class PopcornSessionDetector(private val config: DetectorConfig) {
             elapsedMs = features.timestampMs,
             detectedPops = eventTimes.size,
             recentIntervalSeconds = medianRecentInterval(),
+            currentGapSeconds = currentGap(features.timestampMs),
             shortPopRate = rate(features.timestampMs, config.shortRateWindowSeconds),
             peakPopRate = peakRate,
             firstPopMs = firstPopMs,
