@@ -12,9 +12,9 @@ class SessionRepository(private val dao: SessionDao) {
         val entity = SessionEntity(
             System.currentTimeMillis(),
             snapshot.elapsedMs,
-            snapshot.detectedPops,
-            snapshot.firstPopMs,
-            snapshot.peakPopRate,
+            snapshot.estimatedPopCount,
+            snapshot.estimatedFirstPopMs,
+            snapshot.estimatedPeakRate,
             snapshot.recentIntervalSeconds,
             snapshot.completionReason == CompletionReason.DONE_DETECTED,
             (snapshot.completionReason ?: CompletionReason.INTERRUPTED).name,

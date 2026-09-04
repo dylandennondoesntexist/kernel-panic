@@ -8,39 +8,28 @@ import kotlin.math.max
 import kotlin.math.sin
 import kotlin.math.sqrt
 
-/** Stateful feature extractor. It owns filter and previous-spectrum history for one stream. */
+/** Stateful FFT feature extractor with a slowly learned per-frequency background profile. */
 class AudioFeatureExtractor(
     private val sampleRate: Int,
     private val config: DetectorConfig,
 ) {
-    private var previousInput = 0.0
-    private var previousHighPassed = 0.0
     private var previousRms = 1e-6
     private var previousSpectrum: DoubleArray? = null
-    private val alpha = run {
-        val rc = 1.0 / (2.0 * PI * config.highPassHz)
-        val dt = 1.0 / sampleRate
-        rc / (rc + dt)
-    }
+    private var backgroundSpectrum: DoubleArray? = null
 
-    fun extract(samples: ShortArray, timestampMs: Long): AudioFeatures {
+    fun extract(samples: DoubleArray, timestampMs: Long, digitalSilence: Boolean): AudioFeatures {
         require(samples.size == config.frameSize) { "Expected ${config.frameSize} samples" }
         val n = samples.size
-        val filtered = DoubleArray(n)
+        val windowedSamples = DoubleArray(n)
         var sumSquares = 0.0
         var peak = 0.0
-        var rawNonZero = false
         var firstEnergy = 0.0
         var lastEnergy = 0.0
 
         for (i in samples.indices) {
-            val input = samples[i] / 32768.0
-            if (samples[i].toInt() != 0) rawNonZero = true
-            val hp = alpha * (previousHighPassed + input - previousInput)
-            previousInput = input
-            previousHighPassed = hp
+            val hp = samples[i]
             val windowed = hp * (0.5 - 0.5 * cos(2.0 * PI * i / (n - 1)))
-            filtered[i] = windowed
+            windowedSamples[i] = windowed
             val square = hp * hp
             sumSquares += square
             peak = max(peak, kotlin.math.abs(hp))
@@ -50,19 +39,30 @@ class AudioFeatureExtractor(
 
         val rms = sqrt(sumSquares / n).coerceAtLeast(1e-9)
         val rmsDb = 20.0 * log10(rms)
-        val magnitudes = fftMagnitudes(filtered)
+        val magnitudes = fftMagnitudes(windowedSamples)
         val totalPower = magnitudes.sumOf { it * it }.coerceAtLeast(1e-15)
         var microwavePower = 0.0
         var highPower = 0.0
         var logMagnitudeSum = 0.0
         var arithmeticMagnitude = 0.0
         var includedBins = 0
+        var popExcessSquares = 0.0
+        var popExcessBins = 0
+        val learnedBackground = backgroundSpectrum
 
         for (bin in 1 until magnitudes.size) {
             val frequency = bin.toDouble() * sampleRate / n
             val power = magnitudes[bin] * magnitudes[bin]
             if (frequency in config.microwaveBandLowHz..config.microwaveBandHighHz) microwavePower += power
-            if (frequency in config.popBandLowHz..minOf(config.popBandHighHz, sampleRate / 2.0)) highPower += power
+            if (frequency in config.popBandLowHz..minOf(config.popBandHighHz, sampleRate / 2.0)) {
+                highPower += power
+                learnedBackground?.let { background ->
+                    val reference = background[bin].coerceAtLeast(1e-9)
+                    val excess = ((magnitudes[bin] - reference) / reference).coerceIn(0.0, 25.0)
+                    popExcessSquares += excess * excess
+                    popExcessBins++
+                }
+            }
             if (frequency >= config.highPassHz) {
                 val magnitude = magnitudes[bin].coerceAtLeast(1e-12)
                 logMagnitudeSum += ln(magnitude)
@@ -70,6 +70,7 @@ class AudioFeatureExtractor(
                 includedBins++
             }
         }
+        updateBackgroundSpectrum(magnitudes, timestampMs)
 
         val normalized = DoubleArray(magnitudes.size) { magnitudes[it] / sqrt(totalPower) }
         val prior = previousSpectrum
@@ -103,10 +104,30 @@ class AudioFeatureExtractor(
             microwaveBandDb = 20.0 * log10(microwaveRms),
             attackRatio = (rms / previousRms).coerceAtMost(20.0),
             decayRatio = (attack / decay.coerceAtLeast(1e-9)).coerceAtMost(20.0),
-            digitalSilence = !rawNonZero,
+            digitalSilence = digitalSilence,
+            spectralExcess = if (popExcessBins == 0) 0.0 else sqrt(popExcessSquares / popExcessBins),
         )
         previousRms = rms
         return result
+    }
+
+    private fun updateBackgroundSpectrum(magnitudes: DoubleArray, timestampMs: Long) {
+        val background = backgroundSpectrum
+        if (background == null) {
+            backgroundSpectrum = magnitudes.copyOf()
+            return
+        }
+        val calibrating = timestampMs < (config.calibrationSeconds * 1_000).toLong()
+        val learning = timestampMs < (config.backgroundLearningSeconds * 1_000).toLong()
+        for (bin in magnitudes.indices) {
+            val alpha = when {
+                calibrating -> if (magnitudes[bin] < background[bin]) 0.10 else 0.035
+                magnitudes[bin] < background[bin] -> 0.018
+                learning -> 0.0015
+                else -> 0.00015
+            }
+            background[bin] += alpha * (magnitudes[bin] - background[bin])
+        }
     }
 
     private fun fftMagnitudes(realInput: DoubleArray): DoubleArray {

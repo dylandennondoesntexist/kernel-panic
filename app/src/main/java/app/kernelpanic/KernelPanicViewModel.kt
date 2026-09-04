@@ -84,7 +84,7 @@ class KernelPanicViewModel(application: Application) : AndroidViewModel(applicat
         finalize(snapshot)
     }
 
-    fun suppressSelfNoise(durationMs: Long = 1_400) {
+    fun suppressSelfNoise(durationMs: Long = 1_800) {
         detector?.suppressEventsFor(durationMs)
     }
 

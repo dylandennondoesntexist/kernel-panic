@@ -24,6 +24,11 @@ class DetectorScenarioTest {
         assertTrue(run.snapshots.any { it.phase == SessionPhase.ACTIVE })
         assertNotNull(run.last.doneAtMs)
         assertTrue("Done was premature: ${run.last.doneAtMs}", run.last.doneAtMs!! >= 30_000)
+        val slowing = run.snapshots.firstOrNull { it.phase == SessionPhase.DECLINING }
+        assertNotNull("The descending side of the rate curve should produce SLOWING", slowing)
+        assertTrue("SLOWING should precede the final sparse-tail decision", run.last.doneAtMs!! - slowing!!.elapsedMs >= 3_000)
+        assertTrue("SLOWING must begin on a negative rate slope", slowing.conservativeRateSlope < 0.0)
+        assertVisibleLifecycleNeverRegresses(run.snapshots)
     }
 
     @Test
@@ -40,8 +45,12 @@ class DetectorScenarioTest {
     fun oneEarlyLongGap_doesNotCausePrematureDone() {
         val run = runScenario(SyntheticScenario.EARLY_LONG_GAP)
         assertTrue(run.snapshots.any { it.phase == SessionPhase.ACTIVE })
+        assertFalse("A temporary lull must not be shown as slowing", run.snapshots.any {
+            it.phase == SessionPhase.DECLINING && it.elapsedMs < 25_000
+        })
         assertFalse(run.snapshots.any { it.doneAtMs != null && it.elapsedMs < 25_000 })
         assertNotNull(run.last.doneAtMs)
+        assertVisibleLifecycleNeverRegresses(run.snapshots)
     }
 
     @Test
@@ -54,15 +63,18 @@ class DetectorScenarioTest {
     @Test
     fun fastSuccessivePops_areDebouncedButRemainDistinct() {
         val fixture = SyntheticAudioGenerator.render(SyntheticScenario.FAST_POPS)
-        val run = runFixture(fixture.samples, fixture.sampleRate)
+        val run = runFixture(fixture.samples, fixture.sampleRate, setupNoiseGuardSeconds = 0.0)
         assertTrue("Too many real events were merged: ${run.last.detectedPops}", run.last.detectedPops >= fixture.expectedPopTimesSeconds.size * 0.55)
         assertTrue("One pop counted as multiple events", run.last.detectedPops <= fixture.expectedPopTimesSeconds.size + 2)
+        assertTrue("The playful estimate should be at least as responsive as cadence events", run.last.estimatedPopCount >= run.last.detectedPops)
+        assertTrue("The Pop Count graph must be cumulative", run.last.popHistory.zipWithNext().all { (before, after) -> after >= before })
+        assertEquals(run.last.estimatedPopCount, run.last.popHistory.last().toInt())
     }
 
     @Test
     fun selfNoiseSuppression_ignoresAlertWindowAndThenResumes() {
         val fixture = SyntheticAudioGenerator.render(SyntheticScenario.FAST_POPS)
-        val config = DetectorConfig(frameSize = 512, hopSize = 256, popBandHighHz = fixture.sampleRate * 0.45)
+        val config = DetectorConfig(frameSize = 512, hopSize = 256, popBandHighHz = fixture.sampleRate * 0.45, setupNoiseGuardSeconds = 0.0)
         val detector = PopcornDetector(fixture.sampleRate, config)
         val firstEnd = (fixture.sampleRate * 4.8).toInt()
         detector.process(fixture.samples.copyOfRange(0, firstEnd))
@@ -144,8 +156,13 @@ class DetectorScenarioTest {
         return runFixture(fixture.samples, fixture.sampleRate)
     }
 
-    private fun runFixture(samples: ShortArray, sampleRate: Int): ScenarioRun {
-        val config = DetectorConfig(frameSize = 512, hopSize = 256, popBandHighHz = sampleRate * 0.45)
+    private fun runFixture(samples: ShortArray, sampleRate: Int, setupNoiseGuardSeconds: Double = 10.0): ScenarioRun {
+        val config = DetectorConfig(
+            frameSize = 512,
+            hopSize = 256,
+            popBandHighHz = sampleRate * 0.45,
+            setupNoiseGuardSeconds = setupNoiseGuardSeconds,
+        )
         val detector = PopcornDetector(sampleRate, config)
         val snapshots = mutableListOf<DetectorSnapshot>()
         var cursor = 0
@@ -155,6 +172,23 @@ class DetectorScenarioTest {
             cursor = end
         }
         return ScenarioRun(snapshots, snapshots.last())
+    }
+
+    private fun assertVisibleLifecycleNeverRegresses(snapshots: List<DetectorSnapshot>) {
+        val rank = mapOf(
+            SessionPhase.WAITING to 0,
+            SessionPhase.RAMPING_UP to 1,
+            SessionPhase.ACTIVE to 2,
+            SessionPhase.DECLINING to 3,
+            SessionPhase.DONE to 4,
+            SessionPhase.WARNING to 5,
+            SessionPhase.CRITICAL to 6,
+        )
+        val visible = snapshots.mapNotNull { rank[it.phase] }
+        assertTrue(
+            "Visible lifecycle regressed: $visible",
+            visible.zipWithNext().all { (before, after) -> after >= before },
+        )
     }
 
     private data class ScenarioRun(val snapshots: List<DetectorSnapshot>, val last: DetectorSnapshot)

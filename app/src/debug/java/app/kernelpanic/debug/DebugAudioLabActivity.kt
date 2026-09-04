@@ -350,17 +350,22 @@ private fun DetectorResultCard(snapshot: DetectorSnapshot) {
             if (snapshot.doneAtMs != null && snapshot.phase in setOf(SessionPhase.WARNING, SessionPhase.CRITICAL)) {
                 Text("The recording continued with microwave-like sound after DONE, so replay progressed to ${snapshot.phase}.")
             }
-            Text("Accepted pop-like events: ${snapshot.detectedPops}")
-            Text("One event can contain overlapping kernels; this is not a kernel count.", style = MaterialTheme.typography.bodySmall)
-            Text("Peak rate: ${"%.2f".format(snapshot.peakPopRate)}/s")
+            Text("Estimated Pop Count: ${snapshot.estimatedPopCount}")
+            Text("Conservative cadence events: ${snapshot.detectedPops}")
+            Text("The estimate uses rapid-pop candidates; only conservative cadence events affect the lifecycle.", style = MaterialTheme.typography.bodySmall)
+            Text("Estimated peak rate: ${"%.2f".format(snapshot.estimatedPeakRate)}/s")
+            Text("Decision peak rate: ${"%.2f".format(snapshot.peakPopRate)}/s")
+            Text("Decision rate slope: ${"%.2f".format(snapshot.conservativeRateSlope)} pops/s²")
             Text("Recent median: ${snapshot.recentIntervalSeconds ?: "—"}")
             Text("Current gap: ${snapshot.currentGapSeconds?.let { "%.2f s".format(it) } ?: "—"}")
             Text("Active reached: ${snapshot.activeWasReached}")
+            Text("Peak confirmed: ${snapshot.peakConfirmed}")
             if (event != null) {
                 Text("Last transient: ${"%.3f".format(event.score)} (${if (event.accepted) "accepted" else "rejected"})", fontWeight = FontWeight.Bold)
                 Text("RMS ${"%.1f".format(event.rmsDb)} dB • noise ${"%.1f".format(event.noiseFloorDb)} dB")
                 Text("Flux ${"%.3f".format(event.spectralFlux)} • high ratio ${"%.2f".format(event.highFrequencyRatio)}")
                 Text("Crest ${"%.2f".format(event.crestFactor)} • flatness ${"%.2f".format(event.spectralFlatness)} • attack ${"%.2f".format(event.attackRatio)}")
+                Text("Pop-band excess above learned background: ${"%.2f".format(event.spectralExcess)}")
             }
         }
     }

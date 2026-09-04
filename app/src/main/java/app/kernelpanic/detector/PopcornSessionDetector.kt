@@ -6,15 +6,20 @@ import java.util.ArrayDeque
 class PopcornSessionDetector(private val config: DetectorConfig) {
     private var phase = SessionPhase.CALIBRATING
     private val eventTimes = mutableListOf<Long>()
-    private val microwaveCalibration = mutableListOf<Double>()
+    private val peakEvidenceTimes = mutableListOf<Long>()
     private var smoothedMicrowaveDb: Double? = null
     private var operationBaselineDb: Double? = null
     private var operationObserved = false
-    private var microwaveDropSinceMs: Long? = null
+    private var operationObservedAtMs: Long? = null
+    private var operationCandidateSinceMs: Long? = null
+    private val microwaveStopEvidence = ArrayDeque<Pair<Long, Boolean>>()
+    private var microwaveStopped = false
     private var invalidSinceMs: Long? = null
     private var activeReached = false
+    private var peakConfirmed = false
+    private var activeCandidateSinceMs: Long? = null
     private var activeSinceMs: Long? = null
-    private var decliningSinceMs: Long? = null
+    private var declineCandidateSinceMs: Long? = null
     private var sparseSinceMs: Long? = null
     private var doneAtMs: Long? = null
     private var completionReason: CompletionReason? = null
@@ -24,33 +29,44 @@ class PopcornSessionDetector(private val config: DetectorConfig) {
     private val rateHistory = ArrayDeque<Float>()
     private var lastEvent: PopEvent? = null
 
-    fun process(features: AudioFeatures, event: PopEvent?): DetectorSnapshot {
+    fun process(
+        features: AudioFeatures,
+        event: PopEvent?,
+        ignoreApplianceState: Boolean = false,
+    ): DetectorSnapshot {
         val now = features.timestampMs
         updateSignalHealth(features, now)
         if (phase == SessionPhase.INTERRUPTED) return snapshot(features)
 
-        val accepted = event?.takeIf { it.accepted }
-        if (accepted != null) {
-            eventTimes += accepted.timestampMs
-            if (firstPopMs == null) firstPopMs = accepted.timestampMs
-            lastEvent = accepted
-        } else if (event != null) {
-            lastEvent = event
+        if (event != null) lastEvent = event
+        if (!ignoreApplianceState) {
+            updateMicrowaveState(features, now)
         }
 
-        updateMicrowaveState(features, now, accepted != null)
+        // Button beeps, the door closing, and bag crinkles are common immediately after
+        // listening starts. Keep them visible in diagnostics, but do not let them seed the
+        // lifecycle until a steady microwave-running bed has actually been observed.
+        val operationAgeMs = operationObservedAtMs?.let { now - it } ?: -1L
+        val accepted = event?.takeIf {
+            it.accepted && operationAgeMs >= (config.setupNoiseGuardSeconds * 1_000).toLong()
+        }
+        if (accepted != null) {
+            eventTimes += accepted.timestampMs
+            if (accepted.score >= config.peakEvidenceMinimumScore &&
+                accepted.spectralFlatness >= config.peakEvidenceMinimumFlatness) {
+                peakEvidenceTimes += accepted.timestampMs
+            }
+            if (firstPopMs == null) firstPopMs = accepted.timestampMs
+        }
         val calibrationMs = (config.calibrationSeconds * 1000).toLong()
         if (phase == SessionPhase.CALIBRATING && now >= calibrationMs) {
-            operationBaselineDb = microwaveCalibration.sorted().let { values ->
-                if (values.isEmpty()) features.microwaveBandDb else values[values.size / 2]
-            }
-            operationObserved = (operationBaselineDb ?: -100.0) >= config.microwaveMinimumDb
             phase = SessionPhase.WAITING
         }
 
         if (phase !in setOf(SessionPhase.CALIBRATING, SessionPhase.STOPPED, SessionPhase.INTERRUPTED)) {
             updateLifecycle(now)
             updateStopDecision(now)
+            updateTimeLimits(now)
         }
         updateRateHistory(now)
         return snapshot(features)
@@ -67,8 +83,10 @@ class PopcornSessionDetector(private val config: DetectorConfig) {
             currentGapSeconds = currentGap(atMs),
             shortPopRate = rate(atMs, config.shortRateWindowSeconds),
             peakPopRate = peakRate,
+            conservativeRateSlope = rateSlope(atMs),
             firstPopMs = firstPopMs,
             activeWasReached = activeReached,
+            peakConfirmed = peakConfirmed,
             doneAtMs = doneAtMs,
             completionReason = completionReason,
             rateHistory = rateHistory.toList(),
@@ -88,19 +106,44 @@ class PopcornSessionDetector(private val config: DetectorConfig) {
         }
     }
 
-    private fun updateMicrowaveState(features: AudioFeatures, now: Long, transientFrame: Boolean) {
-        if (phase == SessionPhase.CALIBRATING && !features.digitalSilence && !transientFrame) {
-            microwaveCalibration += features.microwaveBandDb
-        }
+    private fun updateMicrowaveState(features: AudioFeatures, now: Long) {
         val previous = smoothedMicrowaveDb
         smoothedMicrowaveDb = if (previous == null) features.microwaveBandDb else previous * 0.96 + features.microwaveBandDb * 0.04
+
+        // The band level is already heavily smoothed. Requiring transient-free frames here
+        // made real rotating fans look unstable and delayed "running" until the loud peak.
+        if (!features.digitalSilence && smoothedMicrowaveDb!! >= config.microwaveMinimumDb) {
+            if (operationCandidateSinceMs == null) operationCandidateSinceMs = now
+            if (now - operationCandidateSinceMs!! >= (config.microwaveStartPersistenceSeconds * 1_000).toLong()) {
+                if (!operationObserved) {
+                    operationObserved = true
+                    operationObservedAtMs = now
+                }
+                val currentBaseline = operationBaselineDb
+                operationBaselineDb = if (currentBaseline == null) smoothedMicrowaveDb else {
+                    // Continue moving upward during heating so a quiet room/startup baseline
+                    // cannot prevent a later microwave-off decision. Downward drift is tiny.
+                    val delta = (smoothedMicrowaveDb!! - currentBaseline).coerceIn(-1.0, 4.0)
+                    currentBaseline + (if (delta > 0.0) 0.018 else 0.001) * delta
+                }
+            }
+        } else if (!features.digitalSilence) {
+            operationCandidateSinceMs = null
+        }
+
         val baseline = operationBaselineDb ?: return
-        if (!operationObserved && smoothedMicrowaveDb!! >= config.microwaveMinimumDb) operationObserved = true
-        val dropped = operationObserved && smoothedMicrowaveDb!! <= baseline - config.microwaveStopDropDb
-        if (dropped) {
-            if (microwaveDropSinceMs == null) microwaveDropSinceMs = now
-        } else {
-            microwaveDropSinceMs = null
+        if (!operationObserved || microwaveStopped) return
+        val belowRunningLevel = smoothedMicrowaveDb!! <= baseline - config.microwaveStopDropDb
+        microwaveStopEvidence.addLast(now to belowRunningLevel)
+        val windowMs = (config.microwaveStopPersistenceSeconds * 1_000).toLong()
+        while (microwaveStopEvidence.firstOrNull()?.first?.let { now - it > windowMs } == true) {
+            microwaveStopEvidence.removeFirst()
+        }
+        val spansWindow = microwaveStopEvidence.firstOrNull()?.first?.let { now - it >= windowMs - 100 } == true
+        val quietRatio = if (microwaveStopEvidence.isEmpty()) 0.0
+            else microwaveStopEvidence.count { it.second }.toDouble() / microwaveStopEvidence.size
+        if (spansWindow && quietRatio >= config.microwaveStopRequiredRatio) {
+            microwaveStopped = true
         }
     }
 
@@ -113,38 +156,57 @@ class PopcornSessionDetector(private val config: DetectorConfig) {
             SessionPhase.WAITING -> if (recentLong.size >= 3) phase = SessionPhase.RAMPING_UP
             SessionPhase.RAMPING_UP -> {
                 val span = if (recentLong.size > 1) (recentLong.last() - recentLong.first()) / 1000.0 else 0.0
-                if (recentLong.size >= config.activeMinimumEvents &&
-                    shortRate >= config.activeMinimumRate && span >= config.activeMinimumSpanSeconds) {
-                    phase = SessionPhase.ACTIVE
-                    activeReached = true
-                    activeSinceMs = now
+                val sustainedCandidate = recentLong.size >= config.activeMinimumEvents &&
+                    shortRate >= config.activeMinimumRate && span >= config.activeMinimumSpanSeconds
+                if (sustainedCandidate) {
+                    if (activeCandidateSinceMs == null) activeCandidateSinceMs = now
+                    if (now - activeCandidateSinceMs!! >= (config.activeConfirmationSeconds * 1_000).toLong()) {
+                        phase = SessionPhase.ACTIVE
+                        activeReached = true
+                        activeSinceMs = now
+                        activeCandidateSinceMs = null
+                    }
+                } else {
+                    activeCandidateSinceMs = null
                 }
             }
             SessionPhase.ACTIVE -> {
                 val activeLongEnough = now - (activeSinceMs ?: now) >= 2_000
-                val interval = medianRecentInterval()
-                if (activeLongEnough && peakRate >= config.declineMinimumPeakRate &&
-                    shortRate <= peakRate * config.declinePeakRatio &&
-                    (interval == null || interval >= 0.85 || now - (eventTimes.lastOrNull() ?: now) >= 1_500)) {
-                    phase = SessionPhase.DECLINING
-                    decliningSinceMs = now
+                updatePeakConfirmation(now)
+                val curveRate = rate(now, config.slowingRateWindowSeconds)
+                val curveSlope = rateSlope(now)
+                val convincingDecline = activeLongEnough && peakConfirmed && peakRate >= config.declineMinimumPeakRate &&
+                    curveRate <= peakRate * config.slowingPeakRatio &&
+                    curveSlope <= config.slowingMaximumRateSlope
+                // The final interval rule remains independent from this earlier curve-stage
+                // signal. SLOWING is informational; only evaluateDone can announce DONE.
+                evaluateDone(now, shortRate)
+                if (convincingDecline) {
+                    if (declineCandidateSinceMs == null) declineCandidateSinceMs = now
+                    if (doneAtMs == null &&
+                        now - declineCandidateSinceMs!! >= (config.slowingConfirmationSeconds * 1_000).toLong()) {
+                        phase = SessionPhase.DECLINING
+                    }
+                } else {
+                    declineCandidateSinceMs = null
                 }
             }
             SessionPhase.DECLINING -> {
-                if (shortRate >= peakRate * 0.78 && now - (decliningSinceMs ?: now) >= 1_500) {
-                    phase = SessionPhase.ACTIVE
-                    decliningSinceMs = null
-                    sparseSinceMs = null
-                } else {
-                    evaluateDone(now, shortRate)
-                }
+                // Once a sustained decline is shown, the visible cooking lifecycle is
+                // monotonic. A stray burst cannot bounce the UI back to Popping.
+                evaluateDone(now, shortRate)
             }
             SessionPhase.DONE, SessionPhase.WARNING, SessionPhase.CRITICAL -> {
                 val sinceDone = now - (doneAtMs ?: now)
-                phase = when {
-                    sinceDone >= (config.criticalDelaySeconds * 1000).toLong() && microwaveOperating() -> SessionPhase.CRITICAL
-                    sinceDone >= (config.warningDelaySeconds * 1000).toLong() && microwaveOperating() -> SessionPhase.WARNING
+                val desired = when {
+                    sinceDone >= (config.criticalDelaySeconds * 1000).toLong() -> SessionPhase.CRITICAL
+                    sinceDone >= (config.warningDelaySeconds * 1000).toLong() -> SessionPhase.WARNING
                     else -> SessionPhase.DONE
+                }
+                // Alert severity is monotonic. Beeps, the door, and the phone's own alert can
+                // never move the UI from red/yellow back to green.
+                if (desired.ordinal > phase.ordinal) {
+                    phase = desired
                 }
             }
             else -> Unit
@@ -152,7 +214,7 @@ class PopcornSessionDetector(private val config: DetectorConfig) {
     }
 
     private fun evaluateDone(now: Long, shortRate: Double) {
-        if (!activeReached || doneAtMs != null) return
+        if (!activeReached || !peakConfirmed || doneAtMs != null) return
         val intervals = recentIntervals(config.decisionIntervalWindowSize)
         val median = median(intervals)
         val sufficientlySparse = intervals.size >= config.sparseRequiredIntervals &&
@@ -177,18 +239,53 @@ class PopcornSessionDetector(private val config: DetectorConfig) {
     }
 
     private fun updateStopDecision(now: Long) {
-        val dropStart = microwaveDropSinceMs ?: return
-        if (now - dropStart < (config.microwaveStopPersistenceSeconds * 1000).toLong()) return
+        if (!microwaveStopped) return
         completionReason = if (doneAtMs != null) CompletionReason.DONE_DETECTED else CompletionReason.MICROWAVE_STOPPED
         phase = SessionPhase.STOPPED
     }
 
-    private fun microwaveOperating(): Boolean = operationObserved && microwaveDropSinceMs == null
+    private fun updatePeakConfirmation(now: Long) {
+        if (peakConfirmed) return
+        val activeFor = now - (activeSinceMs ?: now)
+        val cutoff = now - (config.peakEvidenceWindowSeconds * 1_000).toLong()
+        val recentEvidence = peakEvidenceTimes.count { it >= cutoff }
+        if (activeFor >= (config.peakConfirmationSeconds * 1_000).toLong() &&
+            recentEvidence >= config.peakEvidenceMinimumEvents &&
+            peakRate >= config.declineMinimumPeakRate) {
+            peakConfirmed = true
+        }
+    }
+
+    private fun updateTimeLimits(now: Long) {
+        if (phase in setOf(SessionPhase.STOPPED, SessionPhase.INTERRUPTED)) return
+        val doneTime = doneAtMs
+        if (doneTime != null && now - doneTime >= (config.postDoneMaximumSeconds * 1_000).toLong()) {
+            completionReason = CompletionReason.DONE_DETECTED
+            phase = SessionPhase.STOPPED
+        } else if (now >= (config.maximumSessionSeconds * 1_000).toLong()) {
+            completionReason = if (doneTime != null) CompletionReason.DONE_DETECTED else CompletionReason.TIME_LIMIT
+            phase = SessionPhase.STOPPED
+        }
+    }
+
+    private fun microwaveOperating(): Boolean = operationObserved && !microwaveStopped
 
     private fun rate(now: Long, seconds: Double): Double {
         val cutoff = now - (seconds * 1000).toLong()
         return eventTimes.count { it >= cutoff }.toDouble() / seconds
     }
+
+    /** First derivative of pop rate (the second derivative of cumulative Pop Count). */
+    private fun rateSlope(now: Long): Double {
+        val seconds = config.slowingRateWindowSeconds
+        val windowMs = (seconds * 1_000).toLong()
+        val recent = rateBetween(now - windowMs, now, seconds)
+        val previous = rateBetween(now - 2 * windowMs, now - windowMs, seconds)
+        return (recent - previous) / seconds
+    }
+
+    private fun rateBetween(startExclusiveMs: Long, endInclusiveMs: Long, seconds: Double): Double =
+        eventTimes.count { it > startExclusiveMs && it <= endInclusiveMs }.toDouble() / seconds
 
     private fun recentIntervals(count: Int): List<Double> = eventTimes.zipWithNext { a, b -> (b - a) / 1000.0 }.takeLast(count)
 
@@ -221,10 +318,12 @@ class PopcornSessionDetector(private val config: DetectorConfig) {
             currentGapSeconds = currentGap(features.timestampMs),
             shortPopRate = rate(features.timestampMs, config.shortRateWindowSeconds),
             peakPopRate = peakRate,
+            conservativeRateSlope = rateSlope(features.timestampMs),
             firstPopMs = firstPopMs,
             audioLevel = audioLevel,
             microwaveOperating = microwaveOperating(),
             activeWasReached = activeReached,
+            peakConfirmed = peakConfirmed,
             doneAtMs = doneAtMs,
             completionReason = completionReason,
             signalHealthy = phase != SessionPhase.INTERRUPTED,

@@ -1,7 +1,6 @@
 package app.kernelpanic.ui
 
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -116,21 +115,18 @@ fun HomeScreen(
             color = foreground,
             modifier = Modifier.semantics { heading() },
         )
-        Text(statusSubtitle(phase), color = foreground.copy(alpha = 0.82f), textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
+        if (listening) {
+            Text(statusSubtitle(phase), color = foreground.copy(alpha = 0.82f), textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
+        }
 
         if (listening) {
             Spacer(Modifier.height(20.dp))
             AudioBars(state.detector.audioLevel, Modifier.fillMaxWidth().height(54.dp))
-            RateGraph(state.detector.rateHistory, Modifier.padding(top = 8.dp).standardGraphSize())
+            RateGraph(state.detector.popHistory, Modifier.padding(top = 8.dp).standardGraphSize())
             Row(Modifier.fillMaxWidth().padding(vertical = 14.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
-                val currentGap = state.detector.currentGapSeconds
-                val recentMedian = state.detector.recentIntervalSeconds
-                val showGap = phase in setOf(SessionPhase.DECLINING, SessionPhase.DONE, SessionPhase.WARNING, SessionPhase.CRITICAL) &&
-                    currentGap != null && currentGap > (recentMedian ?: 0.0)
-                val intervalValue = if (showGap) currentGap else recentMedian
                 LiveStat("Time", formatDuration(state.detector.elapsedMs), foreground)
-                LiveStat("Pop events", state.detector.detectedPops.toString(), foreground)
-                LiveStat(if (showGap) "Current gap" else "Recent median", intervalValue?.let { String.format(Locale.US, "%.1f s", it) } ?: "—", foreground)
+                LiveStat("Pop Count", state.detector.estimatedPopCount.toString(), foreground)
+                LiveStat("Pops / sec", String.format(Locale.US, "%.0f", state.detector.estimatedCurrentRate), foreground)
             }
             OutlinedButton(onClick = onStop, modifier = Modifier.fillMaxWidth().height(56.dp)) { Text("STOP") }
         } else {
@@ -147,13 +143,12 @@ fun HomeScreen(
                     }
                 },
                 shape = CircleShape,
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                border = BorderStroke(3.dp, MaterialTheme.colorScheme.primary),
+                color = Color(0xFFF0665E),
                 shadowElevation = 8.dp,
                 modifier = Modifier.size(140.dp).semantics { role = Role.Button; contentDescription = "Start listening with microphone" },
             ) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Surface(shape = CircleShape, color = Color(0xFFD94A3A), modifier = Modifier.size(76.dp)) {}
+                    Surface(shape = CircleShape, color = Color(0xFF7A1712), modifier = Modifier.size(36.dp)) {}
                 }
             }
             Text(
@@ -164,7 +159,6 @@ fun HomeScreen(
                 textAlign = TextAlign.Center,
                 modifier = Modifier.padding(top = 18.dp),
             )
-            Text("Start when you start the microwave", style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 7.dp))
             if (permissionDenied) {
                 Card(Modifier.fillMaxWidth().padding(top = 16.dp)) {
                     Column(Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -180,7 +174,14 @@ fun HomeScreen(
                 }
             }
             Spacer(Modifier.weight(0.15f))
-            Text("Stay nearby • Follow package directions", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.62f))
+            Text(
+                "Stay nearby • Follow package directions • Put phone near microwave with microphone clear and start when you start the microwave",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.62f),
+                textAlign = TextAlign.Center,
+                lineHeight = 18.sp,
+                modifier = Modifier.padding(horizontal = 12.dp),
+            )
         }
     }
 }
@@ -209,16 +210,15 @@ fun SummaryScreen(snapshot: DetectorSnapshot, onHome: () -> Unit, onHistory: () 
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     SummaryRow("Total time", formatDuration(snapshot.elapsedMs))
-                    SummaryRow("Detected pop events", snapshot.detectedPops.toString())
-                    SummaryRow("First detected pop", snapshot.firstPopMs?.let(::formatDuration) ?: "—")
-                    SummaryRow("Peak popping rate", String.format(Locale.US, "%.1f / sec", snapshot.peakPopRate))
-                    SummaryRow("Final recent median", snapshot.recentIntervalSeconds?.let { String.format(Locale.US, "%.1f sec", it) } ?: "—")
+                    SummaryRow("Pop Count", snapshot.estimatedPopCount.toString())
+                    SummaryRow("First detected pop", snapshot.estimatedFirstPopMs?.let(::formatDuration) ?: "—")
+                    SummaryRow("Peak popping rate", String.format(Locale.US, "%.1f / sec", snapshot.estimatedPeakRate))
                 }
             }
         }
         item { Button(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("Done") } }
         item { TextButton(onClick = onHistory) { Text("View history") } }
-        item { Text("Pop events are sound estimates, not an exact kernel count.", style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center) }
+        item { Text("Pop Count is a playful sound estimate; overlapping kernels may merge or split.", style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center) }
     }
 }
 
@@ -241,7 +241,7 @@ fun HistoryScreen(
             LazyColumn(contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 item {
                     val maxPops = sessions.maxOf { it.detectedPopEvents }
-                    Text("Personal best: $maxPops detected pop events", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(bottom = 4.dp))
+                    Text("Personal best: $maxPops pops", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(bottom = 4.dp))
                 }
                 items(sessions, key = { it.id }) { session ->
                     Card(
@@ -252,7 +252,7 @@ fun HistoryScreen(
                             Column(Modifier.weight(1f)) {
                                 Text(reasonLabel(session.completionReason), fontWeight = FontWeight.Bold)
                                 Text(formatDate(session.timestampEpochMs), style = MaterialTheme.typography.bodySmall)
-                                Text("${formatDuration(session.durationMs)} • ${session.detectedPopEvents} events", style = MaterialTheme.typography.bodyMedium)
+                                Text("${formatDuration(session.durationMs)} • ${session.detectedPopEvents} pops", style = MaterialTheme.typography.bodyMedium)
                             }
                             IconButton(onClick = { onDelete(session) }, modifier = Modifier.semantics { contentDescription = "Delete session" }) { Text("×", fontSize = 26.sp) }
                         }
@@ -282,10 +282,9 @@ fun SessionDetailScreen(session: SessionEntity?, onBack: () -> Unit, onDelete: (
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     SummaryRow("Total time", formatDuration(session.durationMs))
-                    SummaryRow("Detected pop events", session.detectedPopEvents.toString())
+                    SummaryRow("Pop Count", session.detectedPopEvents.toString())
                     SummaryRow("First detected pop", session.firstPopMs?.let(::formatDuration) ?: "—")
                     SummaryRow("Peak popping rate", String.format(Locale.US, "%.1f / sec", session.peakPopRate))
-                    SummaryRow("Final recent median", session.finalIntervalSeconds?.let { String.format(Locale.US, "%.1f sec", it) } ?: "—")
                 }
             }
             OutlinedButton(onClick = { onDelete(session) }, modifier = Modifier.fillMaxWidth()) { Text("Delete session") }

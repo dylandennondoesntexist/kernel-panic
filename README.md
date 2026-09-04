@@ -6,30 +6,29 @@ It is a convenience aid, not a cooking safety system. Stay near the microwave, f
 
 ## What Kernel Panic Does
 
-Tap **Start Listening** when the microwave starts. Kernel Panic requests microphone access at that moment, analyzes live audio while the screen remains visible, and shows a real microphone-level visualization, detected pop-event count, interval estimate, and lifecycle state. A completed session is stored locally in History. Raw microphone audio is never stored or sent anywhere in release builds.
+Tap **Start Listening** when the microwave starts. Kernel Panic requests microphone access at that moment, analyzes live audio while the screen remains visible, and shows a real microphone-level visualization, estimated **Pop Count**, pops-per-second rate, graph, and lifecycle state. A completed session is stored locally in History. Raw microphone audio is never stored or sent anywhere in release builds.
 
-When done is detected, the app provides a large visual state, haptic feedback, and text-to-speech (or an alarm tone fallback). If the microwave continues to sound active, the message escalates from **POPCORN IS DONE!** to **TAKE IT OUT!** and then **STOP THE MICROWAVE!**.
+When done is detected, the app provides a large visual state, haptic feedback, and text-to-speech (or an alarm tone fallback). The message escalates monotonically from **POPCORN IS DONE!** to **TAKE IT OUT!** and then **STOP THE MICROWAVE!**; later sounds cannot move it backward. Listening ends when the microwave stops, 60 seconds after a done decision, or after a five-minute absolute session limit.
 
 ## Architecture
 
 ```text
 AudioRecord / debug WAV / synthetic fixture
   → overlapping PCM frames
-  → high-pass filter + Hann window + FFT feature extraction
-  → adaptive multi-feature transient classifier
-  → merged/debounced accepted pop events
-  → rolling event rates and robust interval statistics
-  → explicit popcorn lifecycle state machine
-  → StateFlow-backed Compose UI
+  → continuous high-pass filter + Hann window + FFT features
+  → slowly learned per-frequency appliance/background profile
+  ├─ permissive rapid-onset detector → Pop Count + cumulative graph
+  └─ conservative cadence events → rate/slope + peak evidence → lifecycle state machine
+  → StateFlow-backed Compose UI with shared launcher/mascot art
   → derived session statistics saved with Room
 ```
 
 The main boundaries are:
 
 - `audio/`: `AudioSource`, physical `MicrophoneAudioSource`, and WAV input.
-- `detector/`: feature extraction, transient classification, lifecycle inference, and centralized `DetectorConfig`.
+- `detector/`: adaptive feature extraction, isolated count and decision streams, lifecycle inference, and centralized `DetectorConfig`.
 - `data/`: Room entity, DAO, database, and coroutine-safe repository.
-- `ui/`: Compose screens, theme, live charts, and original Canvas mascot.
+- `ui/`: Compose screens, theme, live charts, and phase-specific faces layered on the shared vector mascot.
 - `testing/`: deterministic microwave, pop, speech, impact, failure, and stop scenarios.
 
 The detector consumes PCM and timestamps implied by the sample stream. It has no dependency on `AudioRecord`, Room, or Compose.
@@ -69,11 +68,14 @@ The deterministic suite covers:
 - one early 2–3 second gap followed by resumed rapid popping;
 - isolated early transients;
 - rapid successive pops and within-event debouncing;
+- setup beeps/door/bag transients before stable microwave operation;
+- permissive count recall without allowing the count to drive doneness;
 - loud low-frequency knocks;
 - speech-like energy;
 - low signal-to-noise pops;
 - exact-zero input failure;
-- microwave stopping before activity, after done, and continuing through warning/critical states.
+- microwave stopping before activity, after done, and continuing through warning/critical states;
+- a required broadband peak, irreversible alert escalation, and post-done/absolute time limits.
 
 State-machine tests separately prove that silence, a lone early pop, and missing input cannot unlock `DONE`. An Android Compose test covers first-run onboarding. Instrumented tests require a connected device or emulator.
 
@@ -81,15 +83,19 @@ State-machine tests separately prove that silence, a lone early pop, and missing
 
 Debug APKs add **Debug Audio Lab** to the main app's overflow menu while retaining a single launcher icon. The lab can run every bundled synthetic fixture, import a mono 16-bit PCM WAV file, or explicitly record a real microwave session to an app-specific WAV file. Its **Saved recordings** list provides Play/Stop and Analyze controls for every captured session, newest first. Recording one actual cooking session once provides a representative fixture that can be replayed repeatedly without using another bag during every tuning pass.
 
-All three inputs use the production `PopcornDetector`. The lab displays accepted/rejected status, score, RMS and noise floor, spectral flux, high-frequency ratio, crest factor, flatness, attack ratio, lifecycle transitions, peak rate, current gap, active evidence, and completion timestamp. Recorded files can also be retrieved with Android Studio's Device Explorer for comparison on a development machine.
+All three inputs use the production `PopcornDetector`. The lab distinguishes the estimated Pop Count from conservative cadence events and displays accepted/rejected status, score, RMS and noise floor, spectral flux, spectral excess above the learned background, high-frequency ratio, crest factor, flatness, attack ratio, lifecycle transitions, both peak rates, the decision-rate slope, peak confirmation, current gap, active evidence, and completion timestamp. Recorded files can also be retrieved with Android Studio's Device Explorer for comparison on a development machine.
 
 The activity, recorder, and raw-file writer live under `app/src/debug`, so they are not compiled into release builds. Release builds contain no recording/export feature.
 
 ## Detector Tuning
 
-All meaningful thresholds are documented in [`DetectorConfig.kt`](app/src/main/java/app/kernelpanic/detector/DetectorConfig.kt): frame/hop sizes, bands, adaptive energy and flux gates, event merge/separation durations, active evidence, decline ratio, sparse interval statistics, no-pop completion, signal loss, appliance-stop persistence, and alert escalation delays.
+All meaningful thresholds are documented in [`DetectorConfig.kt`](app/src/main/java/app/kernelpanic/detector/DetectorConfig.kt): frame/hop sizes, bands, background learning, separate count/decision gates, event merge/separation durations, active and peak evidence, decline ratio, sparse interval statistics, no-pop completion, signal loss, appliance-stop persistence, alert escalation, and session limits.
 
-Doneness is based on the observed acoustic lifecycle, never an expected cook duration or an absolute position in a recording. Microwave-band drop detection can close an unfinished session without claiming doneness; it cannot produce or strengthen a `DONE` decision.
+The initial 2.5 seconds bootstrap the adaptive floors, but they are not treated as a complete microwave profile. A per-frequency background estimate keeps learning slowly for the first minute and then continues adapting at a much lower rate. Pop-like sounds are evaluated by how they rise above that learned spectrum as well as by energy, onset, frequency balance, crest factor, and spectral flatness. Sounds detected before a steady microwave-running bed and its ten-second setup guard are established remain diagnostic-only, which prevents keypad beeps, a door latch, permission taps, and bag crinkles from seeding the lifecycle.
+
+The displayed Pop Count uses the permissive 32 ms rapid-onset detector so closely spaced kernels can remain distinct. Candidates are buffered until either a conservative pop confirms the start or a sustained permissive burst appears late in the heating period; the preceding five seconds are backfilled so the first few pops are less likely to be lost. The graph is this estimate's cumulative total over time. Neither the count nor its graph participates in doneness.
+
+Doneness is based on the observed acoustic lifecycle, never an expected cook duration or an absolute position in a recording. The conservative stream must establish active popping and confirm a sufficiently strong, broadband peak. Adjacent four-second windows estimate pop rate (the slope of cumulative count) and the change in that rate; a sustained negative rate slope on the descending shoulder produces the one-way `SLOWING` state. The stricter sparse-interval/no-pop rules still decide `DONE`. Microwave-band drop detection can close an unfinished session without claiming doneness; it cannot produce or strengthen a `DONE` decision.
 
 Tune from real recordings by importing WAV files into Debug Audio Lab, then run the full regression suite. Avoid optimizing one kitchen recording at the expense of early-done safety regressions.
 
@@ -99,7 +105,7 @@ Kernel Panic has no backend, account, ads, analytics, cloud storage, or networki
 
 ## Limitations
 
-This release uses deterministic signal processing and statistical heuristics, not a trained machine-learning model. Microwave acoustics, automatic microphone gain, rooms, phone placement, bags, and brands vary. External transient sounds can resemble pops, quiet pops can be missed, and simultaneous kernels can merge into one accepted acoustic event. The displayed event count is therefore not yet an exact popped-kernel estimate. The state machine is intentionally conservative: a slightly late alert is preferred to an alert during active popping. Real cooking sessions on several appliances remain essential for field calibration.
+This release uses deterministic signal processing and statistical heuristics, not a trained machine-learning model. Microwave acoustics, automatic microphone gain, rooms, phone placement, bags, brands, speech, and media playback vary. External transient sounds can inflate Pop Count, quiet pops can be missed, simultaneous kernels can merge, and speaker-compressed recordings do not have the same acoustic shape as live popcorn. The count is therefore a playful estimate, not a kernel inventory. The separate state machine remains conservative about doneness: a count false positive cannot itself create a false completion. Real cooking sessions on several appliances remain essential for field calibration.
 
 ## License
 

@@ -64,6 +64,7 @@ class PopEventDetector(private val config: DetectorConfig) {
             crestFactor = features.crestFactor,
             spectralFlatness = features.spectralFlatness,
             attackRatio = features.attackRatio,
+            spectralExcess = features.spectralExcess,
         )
 
         if (looksTransient) {
